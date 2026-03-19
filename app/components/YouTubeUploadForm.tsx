@@ -1,11 +1,23 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { OneDrivePicker } from './OneDrivePicker'
+
+const WORKER_URL = 'https://youtube-upload-worker.anlaharpanda.workers.dev'
+
+interface OneDriveFile {
+  id: string
+  name: string
+  size: number
+  downloadUrl?: string
+}
 
 export function YouTubeUploadForm() {
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [result, setResult] = useState<{ success: boolean; message: string; url?: string } | null>(null)
+  const [videoFile, setVideoFile] = useState<File | OneDriveFile | null>(null)
+  const [thumbnailFile, setThumbnailFile] = useState<File | OneDriveFile | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -14,48 +26,120 @@ export function YouTubeUploadForm() {
     setUploadProgress(0)
     setResult(null)
 
-    const formData = new FormData(e.currentTarget)
+    if (!videoFile) {
+      setResult({ success: false, message: 'Pilih video terlebih dahulu' })
+      setUploading(false)
+      return
+    }
 
     try {
-      const xhr = new XMLHttpRequest()
+      const tokenResponse = await fetch('/api/youtube/get-token')
+      if (!tokenResponse.ok) {
+        throw new Error('YouTube belum terhubung')
+      }
+      const { accessToken } = await tokenResponse.json()
 
-      xhr.upload.addEventListener('progress', (event) => {
-        if (event.lengthComputable) {
-          const percentComplete = Math.round((event.loaded / event.total) * 100)
-          setUploadProgress(percentComplete)
+      const formData = new FormData(e.currentTarget)
+      const title = formData.get('title') as string
+      const description = formData.get('description') as string
+      const privacyStatus = formData.get('privacyStatus') as string
+
+      // Cek apakah video dari local atau OneDrive
+      const isLocalVideo = videoFile instanceof File
+      const isLocalThumbnail = thumbnailFile instanceof File
+
+      if (isLocalVideo) {
+        // Upload dari local
+        const uploadFormData = new FormData()
+        uploadFormData.append('video', videoFile)
+        uploadFormData.append('title', title)
+        uploadFormData.append('description', description)
+        uploadFormData.append('privacyStatus', privacyStatus)
+        uploadFormData.append('accessToken', accessToken)
+        
+        if (thumbnailFile && isLocalThumbnail) {
+          uploadFormData.append('thumbnail', thumbnailFile)
         }
-      })
 
-      const response = await new Promise<{ ok: boolean; data: any }>((resolve, reject) => {
-        xhr.addEventListener('load', () => {
-          try {
-            const data = JSON.parse(xhr.responseText)
-            resolve({ ok: xhr.status === 200, data })
-          } catch {
-            reject(new Error('Invalid response'))
+        const xhr = new XMLHttpRequest()
+
+        xhr.upload.addEventListener('progress', (event) => {
+          if (event.lengthComputable) {
+            const percentComplete = Math.round((event.loaded / event.total) * 100)
+            setUploadProgress(percentComplete)
           }
         })
 
-        xhr.addEventListener('error', () => reject(new Error('Network error')))
-        xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')))
+        const response = await new Promise<{ ok: boolean; data: any }>((resolve, reject) => {
+          xhr.addEventListener('load', () => {
+            try {
+              const data = JSON.parse(xhr.responseText)
+              resolve({ ok: xhr.status === 200, data })
+            } catch {
+              reject(new Error('Invalid response'))
+            }
+          })
 
-        xhr.open('POST', '/api/youtube/upload')
-        xhr.send(formData)
-      })
+          xhr.addEventListener('error', () => reject(new Error('Network error')))
+          xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')))
 
-      if (response.ok) {
-        setResult({
-          success: true,
-          message: 'Video berhasil diupload!',
-          url: response.data.url,
+          xhr.open('POST', `${WORKER_URL}/upload-video`)
+          xhr.send(uploadFormData)
         })
-        formRef.current?.reset()
-        setUploadProgress(0)
+
+        if (response.ok) {
+          setResult({
+            success: true,
+            message: 'Video berhasil diupload!',
+            url: response.data.url,
+          })
+          formRef.current?.reset()
+          setVideoFile(null)
+          setThumbnailFile(null)
+          setUploadProgress(0)
+        } else {
+          setResult({
+            success: false,
+            message: response.data.error || 'Upload gagal',
+          })
+        }
       } else {
-        setResult({
-          success: false,
-          message: response.data.error || 'Upload gagal',
+        // Upload dari OneDrive
+        const videoOneDrive = videoFile as OneDriveFile
+        const thumbnailOneDrive = thumbnailFile as OneDriveFile | null
+
+        const response = await fetch(`${WORKER_URL}/upload-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            description,
+            privacyStatus,
+            videoSource: 'onedrive',
+            videoUrl: videoOneDrive.downloadUrl,
+            thumbnailSource: thumbnailOneDrive ? 'onedrive' : undefined,
+            thumbnailUrl: thumbnailOneDrive?.downloadUrl,
+            accessToken,
+          }),
         })
+
+        const data = await response.json()
+
+        if (response.ok) {
+          setResult({
+            success: true,
+            message: 'Video berhasil diupload!',
+            url: data.url,
+          })
+          formRef.current?.reset()
+          setVideoFile(null)
+          setThumbnailFile(null)
+        } else {
+          setResult({
+            success: false,
+            message: data.error || 'Upload gagal',
+          })
+        }
       }
     } catch (error) {
       setResult({
@@ -114,33 +198,69 @@ export function YouTubeUploadForm() {
         </div>
 
         <div>
-          <label htmlFor="file" className="block text-sm font-medium text-slate-700">
-            File Video *
+          <label className="block text-sm font-medium text-slate-700 mb-2">
+            Video *
           </label>
-          <input
-            type="file"
-            id="file"
-            name="file"
-            accept="video/*"
-            required
-            className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100"
-          />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Dari Local</label>
+              <input
+                type="file"
+                accept="video/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) setVideoFile(file)
+                }}
+                className="block w-full text-sm text-slate-500 file:mr-2 file:rounded file:border-0 file:bg-blue-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-blue-700 hover:file:bg-blue-100"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Dari OneDrive</label>
+              <OneDrivePicker
+                accept="video"
+                label=""
+                onSelect={(file) => setVideoFile(file)}
+              />
+            </div>
+          </div>
+          {videoFile && (
+            <p className="mt-2 text-sm text-green-600">
+              ✓ {videoFile instanceof File ? videoFile.name : (videoFile as OneDriveFile).name}
+            </p>
+          )}
         </div>
 
         <div>
-          <label htmlFor="thumbnail" className="block text-sm font-medium text-slate-700">
+          <label className="block text-sm font-medium text-slate-700 mb-2">
             Thumbnail (Opsional)
           </label>
-          <input
-            type="file"
-            id="thumbnail"
-            name="thumbnail"
-            accept="image/*"
-            className="mt-1 block w-full text-sm text-slate-500 file:mr-4 file:rounded-lg file:border-0 file:bg-green-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-green-700 hover:file:bg-green-100"
-          />
-          <p className="mt-1 text-xs text-slate-500">
-            Format: JPG, PNG. Rekomendasi: 1280x720px (16:9)
-          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Dari Local</label>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) setThumbnailFile(file)
+                }}
+                className="block w-full text-sm text-slate-500 file:mr-2 file:rounded file:border-0 file:bg-green-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-green-700 hover:file:bg-green-100"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Dari OneDrive</label>
+              <OneDrivePicker
+                accept="image"
+                label=""
+                onSelect={(file) => setThumbnailFile(file)}
+              />
+            </div>
+          </div>
+          {thumbnailFile && (
+            <p className="mt-2 text-sm text-green-600">
+              ✓ {thumbnailFile instanceof File ? thumbnailFile.name : (thumbnailFile as OneDriveFile).name}
+            </p>
+          )}
         </div>
 
         <button

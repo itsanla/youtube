@@ -31,7 +31,7 @@ export function YouTubeConnection({ isConnected, channelInfo }: YouTubeConnectio
               <div className="flex-1">
                 <p className="font-semibold text-slate-900">{channelInfo.title}</p>
                 {channelInfo.customUrl && (
-                  <p className="text-sm text-slate-600">@{channelInfo.customUrl}</p>
+                  <p className="text-sm text-slate-600">{channelInfo.customUrl}</p>
                 )}
                 {channelInfo.subscriberCount && (
                   <p className="text-xs text-slate-500">
