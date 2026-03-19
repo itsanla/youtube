@@ -313,7 +313,7 @@ export function InsomeinVideoPlanTable({
                 <p className="text-sm text-slate-600 mb-4">
                   Apakah Anda yakin ingin menghapus rencana video ini?
                 </p>
-                <div className="mb-4 space-y-1 rounded-lg bg-slate-50 p-3 text-sm">
+                <div className="mb-4 space-y-1 rounded-lg bg-blue-50 border border-blue-200 p-3 text-sm text-slate-900">
                   <p>
                     <span className="font-semibold">Film:</span>{' '}
                     {deleteConfirm.plan?.judul_film}
