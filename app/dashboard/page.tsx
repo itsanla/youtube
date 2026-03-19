@@ -1,5 +1,9 @@
 import { ChannelList } from '@/app/components/ChannelList'
 import { getChannels } from '@/app/actions/channel-actions'
+import { YouTubeConnection } from '@/app/components/YouTubeConnection'
+import { YouTubeUploadForm } from '@/app/components/YouTubeUploadForm'
+import { checkYouTubeConnection } from '@/lib/youtube-upload'
+import { getConnectedChannelInfo } from '@/lib/youtube-channel'
 
 export const metadata = {
   title: 'Dashboard Channel YouTube',
@@ -8,6 +12,8 @@ export const metadata = {
 
 export default async function DashboardPage() {
   const channels = await getChannels()
+  const isYouTubeConnected = await checkYouTubeConnection()
+  const channelInfo = isYouTubeConnected ? await getConnectedChannelInfo() : null
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-white px-4 py-10">
@@ -21,6 +27,10 @@ export default async function DashboardPage() {
             Pilih satu channel untuk masuk ke halaman detail rencana video harian dan input JSON judul film.
           </p>
         </header>
+
+        <YouTubeConnection isConnected={isYouTubeConnected} channelInfo={channelInfo} />
+
+        {isYouTubeConnected && <YouTubeUploadForm />}
 
         <ChannelList channels={channels} />
       </div>
