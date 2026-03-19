@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { MovieTitleJsonInputForm } from './MovieTitleJsonInputForm'
+import { ManualVideoPlanForm } from './ManualVideoPlanForm'
 import { InsomeinVideoPlanTable } from './InsomeinVideoPlanTable'
 import { EditVideoPlanModal } from './EditVideoPlanModal'
 import type { VideoPlan } from '@/lib/youtube-types'
@@ -14,6 +15,7 @@ interface ChannelDetailContentProps {
 
 export function ChannelDetailContent({ channelName, plans }: ChannelDetailContentProps) {
   const [isJsonModalOpen, setIsJsonModalOpen] = useState(false)
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false)
   const [editingPlan, setEditingPlan] = useState<VideoPlan | null>(null)
 
   return (
@@ -37,13 +39,22 @@ export function ChannelDetailContent({ channelName, plans }: ChannelDetailConten
                   Kembali ke daftar channel
                 </Link>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsJsonModalOpen(true)}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
-              >
-                Input JSON
-              </button>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsManualModalOpen(true)}
+                  className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+                >
+                  Input Manual
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsJsonModalOpen(true)}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
+                >
+                  Input JSON
+                </button>
+              </div>
             </div>
           </header>
 
@@ -97,6 +108,42 @@ export function ChannelDetailContent({ channelName, plans }: ChannelDetailConten
           plan={editingPlan}
           onClose={() => setEditingPlan(null)}
         />
+      )}
+
+      {/* Manual Input Modal */}
+      {isManualModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <h2 className="text-2xl font-semibold text-slate-900">Input Rencana Video Manual</h2>
+              <button
+                type="button"
+                onClick={() => setIsManualModalOpen(false)}
+                className="rounded-lg text-slate-500 hover:bg-slate-100 p-2 transition"
+                aria-label="Tutup modal"
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+            <ManualVideoPlanForm
+              channelName={channelName}
+              onClose={() => setIsManualModalOpen(false)}
+              onSuccess={() => setIsManualModalOpen(false)}
+            />
+          </div>
+        </div>
       )}
     </>
   )

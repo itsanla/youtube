@@ -679,3 +679,90 @@ export async function deleteVideoPlan(
     }
   }
 }
+
+export async function createVideoPlan(
+  channelName: string,
+  judulVideo: string,
+  judulFilm: string,
+  tanggalUpload: string
+): Promise<ChannelActionState> {
+  const normalizedChannelName = sanitizeChannelName(channelName)
+
+  if (!normalizedChannelName) {
+    return {
+      status: 'error',
+      message: 'Nama channel tidak valid',
+    }
+  }
+
+  if (!judulFilm.trim()) {
+    return {
+      status: 'error',
+      message: 'Judul film tidak boleh kosong',
+    }
+  }
+
+  if (!isValidDateString(tanggalUpload)) {
+    return {
+      status: 'error',
+      message: 'Format tanggal tidak valid',
+    }
+  }
+
+  const channels = await getChannels()
+  if (!channels.includes(normalizedChannelName)) {
+    return {
+      status: 'error',
+      message: 'Channel tidak ditemukan',
+    }
+  }
+
+  try {
+    const videoPlansKey = getChannelPlanKey(normalizedChannelName)
+    const usedMovieTitlesKey = getChannelUsedTitlesKey(normalizedChannelName)
+
+    // Check apakah judul film sudah dipakai
+    const usedTitles = await redis.smembers<string[]>(usedMovieTitlesKey)
+    
+    for (const usedTitle of usedTitles) {
+      if (normalizeTitle(usedTitle) === normalizeTitle(judulFilm)) {
+        return {
+          status: 'error',
+          message: `Judul film "${usedTitle}" sudah pernah dipakai`,
+        }
+      }
+    }
+
+    // Buat rencana video baru
+    const plan: VideoPlan = {
+      judul_video: judulVideo.trim(),
+      judul_film: judulFilm.trim(),
+      tanggal_upload: tanggalUpload,
+    }
+
+    const score = toUnixTimestamp(tanggalUpload)
+
+    // Save ke Redis
+    const pipeline = redis.pipeline()
+    pipeline.zadd(videoPlansKey, {
+      score: score,
+      member: JSON.stringify(plan),
+    })
+    pipeline.sadd(usedMovieTitlesKey, plan.judul_film)
+
+    await pipeline.exec()
+
+    revalidatePath(`/dashboard/${normalizedChannelName}`)
+
+    return {
+      status: 'success',
+      message: 'Rencana video berhasil ditambahkan',
+    }
+  } catch (error) {
+    console.error('createVideoPlan error:', error)
+    return {
+      status: 'error',
+      message: 'Gagal menambahkan rencana video. Coba lagi.',
+    }
+  }
+}
