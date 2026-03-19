@@ -457,3 +457,71 @@ export async function updateVideoPlanTitle(
     }
   }
 }
+
+export async function deleteVideoPlan(
+  channelName: string,
+  judul_film: string,
+  tanggal_upload: string
+): Promise<ChannelActionState> {
+  const normalizedChannelName = sanitizeChannelName(channelName)
+
+  if (!normalizedChannelName) {
+    return {
+      status: 'error',
+      message: 'Nama channel tidak valid',
+    }
+  }
+
+  if (!isValidDateString(tanggal_upload)) {
+    return {
+      status: 'error',
+      message: 'Format tanggal tidak valid',
+    }
+  }
+
+  const channels = await getChannels()
+  if (!channels.includes(normalizedChannelName)) {
+    return {
+      status: 'error',
+      message: 'Channel tidak ditemukan',
+    }
+  }
+
+  try {
+    const videoPlansKey = getChannelPlanKey(normalizedChannelName)
+    const allPlans = await redis.zrange<(string | Record<string, unknown>)[]>(
+      videoPlansKey,
+      0,
+      -1
+    )
+
+    const planToDelete = allPlans.find((planItem) => {
+      const plan = safeJsonParsePlan(planItem)
+      return (
+        plan?.judul_film === judul_film &&
+        plan?.tanggal_upload === tanggal_upload
+      )
+    })
+
+    if (!planToDelete) {
+      return {
+        status: 'error',
+        message: 'Rencana video tidak ditemukan',
+      }
+    }
+
+    await redis.zrem(videoPlansKey, String(planToDelete))
+
+    revalidatePath(`/dashboard/${normalizedChannelName}`)
+
+    return {
+      status: 'success',
+      message: 'Rencana video berhasil dihapus',
+    }
+  } catch {
+    return {
+      status: 'error',
+      message: 'Gagal menghapus rencana video. Coba lagi.',
+    }
+  }
+}

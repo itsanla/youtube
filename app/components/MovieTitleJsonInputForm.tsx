@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useState } from 'react'
+import { useActionState, useEffect, useState } from 'react'
 import { submitMovieTitles } from '@/app/actions/channel-actions'
 import { formatDateToIndonesian } from '@/lib/format-date'
 import type { MovieSubmitState } from '@/lib/youtube-types'
@@ -17,9 +17,10 @@ const EXAMPLE_JSON = `["Inception", "The Matrix", "Parasite", "Oppenheimer", "In
 
 interface MovieTitleJsonInputFormProps {
   channelName: string
+  onSuccess?: () => void
 }
 
-export function MovieTitleJsonInputForm({ channelName }: MovieTitleJsonInputFormProps) {
+export function MovieTitleJsonInputForm({ channelName, onSuccess }: MovieTitleJsonInputFormProps) {
   const [jsonInput, setJsonInput] = useState('[]')
   const [submitIntent, setSubmitIntent] = useState<'analyze' | 'save'>('analyze')
   const [copiedNotification, setCopiedNotification] = useState(false)
@@ -43,9 +44,16 @@ export function MovieTitleJsonInputForm({ channelName }: MovieTitleJsonInputForm
     }
   }
 
+  useEffect(() => {
+    if (state.status === 'success' && state.createdPlans.length > 0 && onSuccess) {
+      const timer = setTimeout(onSuccess, 1500)
+      return () => clearTimeout(timer)
+    }
+  }, [state.status, state.createdPlans.length, onSuccess])
+
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-xl font-semibold text-slate-900">Input JSON Judul Film</h2>
+    <div className="w-full space-y-5">
+      <h2 className="text-lg font-semibold text-slate-900">Format Input JSON</h2>
       <p className="mt-1 text-sm text-slate-600">
         Paste array JSON judul film, lalu analisa judul yang sudah dipakai vs yang masih baru.
       </p>
@@ -150,6 +158,6 @@ export function MovieTitleJsonInputForm({ channelName }: MovieTitleJsonInputForm
           {state.message}
         </div>
       ) : null}
-    </section>
+    </div>
   )
 }
