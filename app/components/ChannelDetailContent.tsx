@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { MovieTitleJsonInputForm } from './MovieTitleJsonInputForm'
 import { InsomeinVideoPlanTable } from './InsomeinVideoPlanTable'
+import { EditVideoPlanModal } from './EditVideoPlanModal'
 import type { VideoPlan } from '@/lib/youtube-types'
 
 interface ChannelDetailContentProps {
@@ -12,7 +13,8 @@ interface ChannelDetailContentProps {
 }
 
 export function ChannelDetailContent({ channelName, plans }: ChannelDetailContentProps) {
-  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [isJsonModalOpen, setIsJsonModalOpen] = useState(false)
+  const [editingPlan, setEditingPlan] = useState<VideoPlan | null>(null)
 
   return (
     <>
@@ -37,7 +39,7 @@ export function ChannelDetailContent({ channelName, plans }: ChannelDetailConten
               </div>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(true)}
+                onClick={() => setIsJsonModalOpen(true)}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-slate-700"
               >
                 Input JSON
@@ -45,18 +47,23 @@ export function ChannelDetailContent({ channelName, plans }: ChannelDetailConten
             </div>
           </header>
 
-          <InsomeinVideoPlanTable channelName={channelName} plans={plans} />
+          <InsomeinVideoPlanTable
+            channelName={channelName}
+            plans={plans}
+            onEditClick={setEditingPlan}
+          />
         </div>
       </main>
 
-      {isModalOpen && (
+      {/* JSON Input Modal */}
+      {isJsonModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between gap-4 mb-4">
               <h2 className="text-2xl font-semibold text-slate-900">Input JSON Judul Film</h2>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => setIsJsonModalOpen(false)}
                 className="rounded-lg text-slate-500 hover:bg-slate-100 p-2 transition"
                 aria-label="Tutup modal"
               >
@@ -77,10 +84,19 @@ export function ChannelDetailContent({ channelName, plans }: ChannelDetailConten
             </div>
             <MovieTitleJsonInputForm
               channelName={channelName}
-              onSuccess={() => setIsModalOpen(false)}
+              onSuccess={() => setIsJsonModalOpen(false)}
             />
           </div>
         </div>
+      )}
+
+      {/* Edit Plan Modal */}
+      {editingPlan && (
+        <EditVideoPlanModal
+          channelName={channelName}
+          plan={editingPlan}
+          onClose={() => setEditingPlan(null)}
+        />
       )}
     </>
   )

@@ -55,8 +55,12 @@ function toUnixTimestamp(dateStr: string): number {
   return Math.floor(new Date(`${dateStr}T00:00:00.000Z`).getTime() / 1000)
 }
 
+// Normalisasi judul: hapus SEMUA spasi dan convert ke lowercase
+// "The Matrix" -> "thematrix"
+// "the      Matrix" -> "thematrix"
+// "ThE     mAtRiX" -> "thematrix"
 function normalizeTitle(title: string): string {
-  return title.trim().toLocaleLowerCase()
+  return title.replace(/\s+/g, '').toLowerCase()
 }
 
 function safeJsonParsePlan(value: string | Record<string, unknown>): VideoPlan | null {
@@ -290,7 +294,9 @@ export async function submitMovieTitles(
     for (const title of parsedTitles) {
       const normalized = normalizeTitle(title)
       if (usedByNormalized.has(normalized)) {
-        alreadyUsed.push(title)
+        // Tampilkan judul asli dari database, bukan judul input
+        const originalTitle = usedByNormalized.get(normalized)!
+        alreadyUsed.push(originalTitle)
       } else {
         newTitles.push(title)
       }
@@ -458,6 +464,116 @@ export async function updateVideoPlanTitle(
   }
 }
 
+export async function updateVideoPlan(
+  channelName: string,
+  oldJudulFilm: string,
+  oldTanggalUpload: string,
+  newJudulVideo: string,
+  newJudulFilm?: string,
+  newTanggalUpload?: string
+): Promise<ChannelActionState> {
+  const normalizedChannelName = sanitizeChannelName(channelName)
+
+  if (!normalizedChannelName) {
+    return {
+      status: 'error',
+      message: 'Nama channel tidak valid',
+    }
+  }
+
+  if (!isValidDateString(oldTanggalUpload)) {
+    return {
+      status: 'error',
+      message: 'Format tanggal lama tidak valid',
+    }
+  }
+
+  if (newTanggalUpload && !isValidDateString(newTanggalUpload)) {
+    return {
+      status: 'error',
+      message: 'Format tanggal baru tidak valid',
+    }
+  }
+
+  const channels = await getChannels()
+  if (!channels.includes(normalizedChannelName)) {
+    return {
+      status: 'error',
+      message: 'Channel tidak ditemukan',
+    }
+  }
+
+  try {
+    const videoPlansKey = getChannelPlanKey(normalizedChannelName)
+    const allPlans = await redis.zrange<(string | Record<string, unknown>)[]>(
+      videoPlansKey,
+      0,
+      -1,
+      { withScores: true }
+    )
+
+    // Find the old plan by judul_film and tanggal_upload
+    let oldPlanScore: number | null = null
+    let foundOldPlan: VideoPlan | null = null
+
+    for (let i = 0; i < allPlans.length; i += 2) {
+      const planItem = allPlans[i]
+      const plan = safeJsonParsePlan(planItem)
+
+      if (
+        plan?.judul_film === oldJudulFilm &&
+        plan?.tanggal_upload === oldTanggalUpload
+      ) {
+        foundOldPlan = plan as VideoPlan
+        oldPlanScore = Number(allPlans[i + 1])
+        break
+      }
+    }
+
+    if (!foundOldPlan || oldPlanScore === null) {
+      return {
+        status: 'error',
+        message: 'Rencana video tidak ditemukan',
+      }
+    }
+
+    // Create updated plan
+    const actualNewJudulFilm = newJudulFilm || oldJudulFilm
+    const actualNewTanggalUpload = newTanggalUpload || oldTanggalUpload
+
+    const updatedPlan: VideoPlan = {
+      judul_video: newJudulVideo.trim(),
+      judul_film: actualNewJudulFilm.trim(),
+      tanggal_upload: actualNewTanggalUpload,
+    }
+
+    const newScore = toUnixTimestamp(actualNewTanggalUpload)
+
+    // Remove old plan by score and add new one
+    const pipeline = redis.pipeline()
+    pipeline.zremrangebyscore(videoPlansKey, oldPlanScore, oldPlanScore)
+    pipeline.zadd(videoPlansKey, {
+      score: newScore,
+      member: JSON.stringify(updatedPlan),
+    })
+
+    await pipeline.exec()
+
+    revalidatePath(`/dashboard/${normalizedChannelName}`)
+
+    return {
+      status: 'success',
+      message: 'Rencana video berhasil diperbarui',
+    }
+  } catch (error) {
+    console.error('updateVideoPlan error:', error)
+    return {
+      status: 'error',
+      message: 'Gagal memperbarui rencana video. Coba lagi.',
+    }
+  }
+}
+
 export async function deleteVideoPlan(
   channelName: string,
   judul_film: string,
@@ -489,28 +605,39 @@ export async function deleteVideoPlan(
 
   try {
     const videoPlansKey = getChannelPlanKey(normalizedChannelName)
+
+    // Get all plans with scores to find the exact score to delete
     const allPlans = await redis.zrange<(string | Record<string, unknown>)[]>(
       videoPlansKey,
       0,
-      -1
+      -1,
+      { withScores: true }
     )
 
-    const planToDelete = allPlans.find((planItem) => {
+    let planScore: number | null = null
+
+    for (let i = 0; i < allPlans.length; i += 2) {
+      const planItem = allPlans[i]
       const plan = safeJsonParsePlan(planItem)
-      return (
+
+      if (
         plan?.judul_film === judul_film &&
         plan?.tanggal_upload === tanggal_upload
-      )
-    })
+      ) {
+        planScore = Number(allPlans[i + 1])
+        break
+      }
+    }
 
-    if (!planToDelete) {
+    if (planScore === null) {
       return {
         status: 'error',
         message: 'Rencana video tidak ditemukan',
       }
     }
 
-    await redis.zrem(videoPlansKey, String(planToDelete))
+    // Use zremrangebyscore to remove by score (more reliable)
+    await redis.zremrangebyscore(videoPlansKey, planScore, planScore)
 
     revalidatePath(`/dashboard/${normalizedChannelName}`)
 
@@ -518,7 +645,8 @@ export async function deleteVideoPlan(
       status: 'success',
       message: 'Rencana video berhasil dihapus',
     }
-  } catch {
+  } catch (error) {
+    console.error('deleteVideoPlan error:', error)
     return {
       status: 'error',
       message: 'Gagal menghapus rencana video. Coba lagi.',
