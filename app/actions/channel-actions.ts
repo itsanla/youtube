@@ -639,6 +639,32 @@ export async function deleteVideoPlan(
     // Use zremrangebyscore to remove by score (more reliable)
     await redis.zremrangebyscore(videoPlansKey, planScore, planScore)
 
+    // Check apakah ada rencana video lain dengan judul_film yang sama
+    const remainingPlans = await redis.zrange<(string | Record<string, unknown>)[]>(
+      videoPlansKey,
+      0,
+      -1
+    )
+
+    const hasSameFilm = remainingPlans.some((planItem) => {
+      const plan = safeJsonParsePlan(planItem)
+      return plan?.judul_film === judul_film
+    })
+
+    // Jika tidak ada rencana dengan judul film yang sama, hapus dari used_movie_titles
+    if (!hasSameFilm) {
+      const usedMovieTitlesKey = getChannelUsedTitlesKey(normalizedChannelName)
+      
+      // Cari judul asli di used_movie_titles untuk dihapus
+      const usedTitles = await redis.smembers<string[]>(usedMovieTitlesKey)
+      for (const usedTitle of usedTitles) {
+        if (normalizeTitle(usedTitle) === normalizeTitle(judul_film)) {
+          await redis.srem(usedMovieTitlesKey, usedTitle)
+          break
+        }
+      }
+    }
+
     revalidatePath(`/dashboard/${normalizedChannelName}`)
 
     return {
