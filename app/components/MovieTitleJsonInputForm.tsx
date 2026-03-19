@@ -2,6 +2,7 @@
 
 import { useActionState, useState } from 'react'
 import { submitMovieTitles } from '@/app/actions/channel-actions'
+import { formatDateToIndonesian } from '@/lib/format-date'
 import type { MovieSubmitState } from '@/lib/youtube-types'
 
 const initialState: MovieSubmitState = {
@@ -131,7 +132,7 @@ export function MovieTitleJsonInputForm({ channelName }: MovieTitleJsonInputForm
           <ul className="mt-2 space-y-1 text-sm text-blue-900">
             {state.createdPlans.map((plan) => (
               <li key={`${plan.judul_film}-${plan.tanggal_upload}`}>
-                {plan.tanggal_upload} - {plan.judul_video}
+                {formatDateToIndonesian(plan.tanggal_upload)} - {plan.judul_video}
               </li>
             ))}
           </ul>

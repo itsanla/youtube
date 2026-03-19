@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { formatDateToIndonesian } from '@/lib/format-date'
 import type { VideoPlan } from '@/lib/youtube-types'
 
 interface InsomeinVideoPlanTableProps {
@@ -58,7 +59,7 @@ export function InsomeinVideoPlanTable({ channelName, plans }: InsomeinVideoPlan
                 <tr key={`${plan.judul_film}-${plan.tanggal_upload}`} className="border-b border-slate-100">
                   <td className="px-3 py-2 text-slate-800">{plan.judul_video}</td>
                   <td className="px-3 py-2 text-slate-700">{plan.judul_film}</td>
-                  <td className="px-3 py-2 font-medium text-slate-700">{plan.tanggal_upload}</td>
+                  <td className="px-3 py-2 font-medium text-slate-700">{formatDateToIndonesian(plan.tanggal_upload)}</td>
                 </tr>
               ))
             )}

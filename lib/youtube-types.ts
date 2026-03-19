@@ -1,7 +1,7 @@
 export type ActionStatus = 'idle' | 'success' | 'error'
 
 export interface VideoPlan {
-  judul_video: string
+  judul_video: string // will be filled manually by user
   judul_film: string
   tanggal_upload: string
 }

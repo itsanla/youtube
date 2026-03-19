@@ -59,9 +59,13 @@ function normalizeTitle(title: string): string {
   return title.trim().toLocaleLowerCase()
 }
 
-function safeJsonParsePlan(value: string): VideoPlan | null {
+function safeJsonParsePlan(value: string | Record<string, unknown>): VideoPlan | null {
   try {
-    const parsed = JSON.parse(value) as Partial<VideoPlan>
+    // Upstash Redis library auto-parses JSON strings ke objects
+    // jadi value bisa string atau object
+    const parsed: Partial<VideoPlan> =
+      typeof value === 'string' ? JSON.parse(value) : value
+
     if (
       typeof parsed.judul_video === 'string' &&
       typeof parsed.judul_film === 'string' &&
@@ -98,7 +102,8 @@ export async function getVideoPlans(channelName = DEFAULT_CHANNEL): Promise<Vide
   const normalizedChannelName = sanitizeChannelName(channelName)
   const planKey = getChannelPlanKey(normalizedChannelName)
 
-  const rawPlans = await redis.zrange<string[]>(planKey, 0, -1)
+  const rawPlans = await redis.zrange<(string | Record<string, unknown>)[]>(planKey, 0, -1)
+
   const parsed = rawPlans
     .map((plan) => safeJsonParsePlan(plan))
     .filter((plan): plan is VideoPlan => plan !== null)
@@ -315,16 +320,15 @@ export async function submitMovieTitles(
     const storedLastDate = await redis.get<string>(lastDateKey)
 
     let nextDate = today
-    if (storedLastDate && isValidDateString(storedLastDate) && storedLastDate >= today) {
+    if (storedLastDate && isValidDateString(storedLastDate) && storedLastDate > today) {
       nextDate = addDays(storedLastDate, 1)
     }
 
     const plansToCreate: VideoPlan[] = []
 
     for (const title of newTitles) {
-      const year = nextDate.slice(0, 4)
       plansToCreate.push({
-        judul_video: `Review ${title} - Film Terbaik ${year}`,
+        judul_video: '', // kosongkan, user akan submit manualnya
         judul_film: title,
         tanggal_upload: nextDate,
       })
@@ -334,9 +338,10 @@ export async function submitMovieTitles(
     const pipeline = redis.pipeline()
 
     for (const plan of plansToCreate) {
+      const jsonStr = JSON.stringify(plan)
       pipeline.zadd(videoPlansKey, {
         score: toUnixTimestamp(plan.tanggal_upload),
-        member: JSON.stringify(plan),
+        member: jsonStr,
       })
     }
 
@@ -369,6 +374,86 @@ export async function submitMovieTitles(
       alreadyUsed: [],
       newTitles: [],
       createdPlans: [],
+    }
+  }
+}
+
+export async function updateVideoPlanTitle(
+  channelName: string,
+  judul_film: string,
+  tanggal_upload: string,
+  judul_video_baru: string
+): Promise<ChannelActionState> {
+  const normalizedChannelName = sanitizeChannelName(channelName)
+
+  if (!normalizedChannelName || !judul_video_baru.trim()) {
+    return {
+      status: 'error',
+      message: 'Channel atau judul_video tidak valid',
+    }
+  }
+
+  if (!isValidDateString(tanggal_upload)) {
+    return {
+      status: 'error',
+      message: 'Format tanggal tidak valid',
+    }
+  }
+
+  const channels = await getChannels()
+  if (!channels.includes(normalizedChannelName)) {
+    return {
+      status: 'error',
+      message: 'Channel tidak ditemukan',
+    }
+  }
+
+  try {
+    const videoPlansKey = getChannelPlanKey(normalizedChannelName)
+    const allPlans = await redis.zrange<string[]>(videoPlansKey, 0, -1)
+
+    const planToUpdate = allPlans.find((planStr) => {
+      const plan = safeJsonParsePlan(planStr)
+      return (
+        plan?.judul_film === judul_film &&
+        plan?.tanggal_upload === tanggal_upload
+      )
+    })
+
+    if (!planToUpdate) {
+      return {
+        status: 'error',
+        message: 'Rencana video tidak ditemukan',
+      }
+    }
+
+    const updatedPlan: VideoPlan = {
+      judul_video: judul_video_baru.trim(),
+      judul_film: judul_film,
+      tanggal_upload: tanggal_upload,
+    }
+
+    const score = toUnixTimestamp(tanggal_upload)
+
+    const pipeline = redis.pipeline()
+    pipeline.zrem(videoPlansKey, planToUpdate)
+    pipeline.zadd(videoPlansKey, {
+      score: score,
+      member: JSON.stringify(updatedPlan),
+    })
+
+    await pipeline.exec()
+
+    revalidatePath(`/dashboard/${normalizedChannelName}`)
+
+    return {
+      status: 'success',
+      message: 'Judul video berhasil diperbarui',
+    }
+  } catch {
+    return {
+      status: 'error',
+      message: 'Gagal memperbarui judul video. Coba lagi.',
     }
   }
 }
