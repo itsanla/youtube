@@ -12,10 +12,35 @@ const initialState: MovieSubmitState = {
   createdPlans: [],
 }
 
-export function MovieTitleJsonInputForm() {
+const EXAMPLE_JSON = `["Inception", "The Matrix", "Parasite", "Oppenheimer", "Interstellar", "Dune"]`
+
+interface MovieTitleJsonInputFormProps {
+  channelName: string
+}
+
+export function MovieTitleJsonInputForm({ channelName }: MovieTitleJsonInputFormProps) {
   const [jsonInput, setJsonInput] = useState('[]')
   const [submitIntent, setSubmitIntent] = useState<'analyze' | 'save'>('analyze')
+  const [copiedNotification, setCopiedNotification] = useState(false)
   const [state, formAction, pending] = useActionState(submitMovieTitles, initialState)
+
+  const handleCopyExample = async () => {
+    try {
+      await navigator.clipboard.writeText(EXAMPLE_JSON)
+      setCopiedNotification(true)
+      setTimeout(() => setCopiedNotification(false), 2000)
+    } catch {
+      // Fallback jika clipboard API tidak tersedia
+      const textarea = document.createElement('textarea')
+      textarea.value = EXAMPLE_JSON
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      setCopiedNotification(true)
+      setTimeout(() => setCopiedNotification(false), 2000)
+    }
+  }
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -24,7 +49,13 @@ export function MovieTitleJsonInputForm() {
         Paste array JSON judul film, lalu analisa judul yang sudah dipakai vs yang masih baru.
       </p>
 
+      <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+        <p className="text-xs font-semibold text-blue-900">Contoh Format JSON:</p>
+        <p className="mt-1 font-mono text-xs text-blue-800">{EXAMPLE_JSON}</p>
+      </div>
+
       <form action={formAction} className="mt-4 space-y-3">
+        <input type="hidden" name="channelName" value={channelName} />
         <textarea
           name="movieTitlesJson"
           value={jsonInput}
@@ -36,6 +67,13 @@ export function MovieTitleJsonInputForm() {
         />
 
         <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleCopyExample}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+          >
+            {copiedNotification ? '✓ Disalin!' : 'Salin Contoh'}
+          </button>
           <button
             type="submit"
             name="intent"

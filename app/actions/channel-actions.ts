@@ -11,8 +11,26 @@ import type {
 const CHANNELS_KEY = 'channels'
 const DEFAULT_CHANNEL = 'insomein'
 const USED_MOVIE_TITLES_KEY = 'used_movie_titles'
-const INSOMEIN_VIDEO_PLANS_KEY = 'insomein:video_plans'
-const INSOMEIN_LAST_DATE_KEY = 'insomein:last_date'
+
+function sanitizeChannelName(channelName: string): string {
+  return channelName.trim().toLocaleLowerCase()
+}
+
+function getChannelPlanKey(channelName: string): string {
+  return `${channelName}:video_plans`
+}
+
+function getChannelLastDateKey(channelName: string): string {
+  return `${channelName}:last_date`
+}
+
+function getChannelUsedTitlesKey(channelName: string): string {
+  if (channelName === DEFAULT_CHANNEL) {
+    return USED_MOVIE_TITLES_KEY
+  }
+
+  return `${channelName}:used_movie_titles`
+}
 
 function isValidDateString(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
@@ -74,10 +92,13 @@ export async function getChannels(): Promise<string[]> {
   return [...channels].sort((a, b) => a.localeCompare(b, 'id'))
 }
 
-export async function getVideoPlans(): Promise<VideoPlan[]> {
+export async function getVideoPlans(channelName = DEFAULT_CHANNEL): Promise<VideoPlan[]> {
   await ensureDefaultChannel()
 
-  const rawPlans = await redis.zrange<string[]>(INSOMEIN_VIDEO_PLANS_KEY, 0, -1)
+  const normalizedChannelName = sanitizeChannelName(channelName)
+  const planKey = getChannelPlanKey(normalizedChannelName)
+
+  const rawPlans = await redis.zrange<string[]>(planKey, 0, -1)
   const parsed = rawPlans
     .map((plan) => safeJsonParsePlan(plan))
     .filter((plan): plan is VideoPlan => plan !== null)
@@ -177,6 +198,7 @@ export async function submitMovieTitles(
 
   const rawJson = formData.get('movieTitlesJson')
   const intent = formData.get('intent')
+  const channelNameInput = formData.get('channelName')
 
   if (typeof rawJson !== 'string') {
     return {
@@ -198,6 +220,42 @@ export async function submitMovieTitles(
     }
   }
 
+  if (typeof channelNameInput !== 'string') {
+    return {
+      status: 'error',
+      message: 'Nama channel tidak valid',
+      alreadyUsed: [],
+      newTitles: [],
+      createdPlans: [],
+    }
+  }
+
+  const channelName = sanitizeChannelName(channelNameInput)
+  if (!channelName) {
+    return {
+      status: 'error',
+      message: 'Nama channel tidak valid',
+      alreadyUsed: [],
+      newTitles: [],
+      createdPlans: [],
+    }
+  }
+
+  const channels = await getChannels()
+  if (!channels.includes(channelName)) {
+    return {
+      status: 'error',
+      message: 'Channel tidak ditemukan',
+      alreadyUsed: [],
+      newTitles: [],
+      createdPlans: [],
+    }
+  }
+
+  const usedMovieTitlesKey = getChannelUsedTitlesKey(channelName)
+  const videoPlansKey = getChannelPlanKey(channelName)
+  const lastDateKey = getChannelLastDateKey(channelName)
+
   let parsedTitles: string[] = []
 
   try {
@@ -214,7 +272,7 @@ export async function submitMovieTitles(
   }
 
   try {
-    const usedTitles = await redis.smembers<string[]>(USED_MOVIE_TITLES_KEY)
+    const usedTitles = await redis.smembers<string[]>(usedMovieTitlesKey)
     const usedByNormalized = new Map<string, string>()
 
     for (const usedTitle of usedTitles) {
@@ -254,7 +312,7 @@ export async function submitMovieTitles(
     }
 
     const today = toDateString(new Date())
-    const storedLastDate = await redis.get<string>(INSOMEIN_LAST_DATE_KEY)
+    const storedLastDate = await redis.get<string>(lastDateKey)
 
     let nextDate = today
     if (storedLastDate && isValidDateString(storedLastDate) && storedLastDate >= today) {
@@ -276,25 +334,26 @@ export async function submitMovieTitles(
     const pipeline = redis.pipeline()
 
     for (const plan of plansToCreate) {
-      pipeline.zadd(INSOMEIN_VIDEO_PLANS_KEY, {
+      pipeline.zadd(videoPlansKey, {
         score: toUnixTimestamp(plan.tanggal_upload),
         member: JSON.stringify(plan),
       })
     }
 
     for (const title of newTitles) {
-      pipeline.sadd(USED_MOVIE_TITLES_KEY, title)
+      pipeline.sadd(usedMovieTitlesKey, title)
     }
 
     const finalDate = plansToCreate[plansToCreate.length - 1]?.tanggal_upload
     if (finalDate) {
-      pipeline.set(INSOMEIN_LAST_DATE_KEY, finalDate)
+      pipeline.set(lastDateKey, finalDate)
     }
 
     await pipeline.exec()
 
     revalidatePath('/dashboard')
     revalidatePath('/channels')
+    revalidatePath(`/dashboard/${channelName}`)
 
     return {
       status: 'success',

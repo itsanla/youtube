@@ -35,14 +35,12 @@ export function ChannelList({ channels }: ChannelListProps) {
         {channels.map((channel) => (
           <li key={channel} className="rounded-lg border border-slate-200 p-3">
             <p className="text-sm font-semibold text-slate-800">{channel}</p>
-            {channel === 'insomein' ? (
-              <Link
-                href="/dashboard"
-                className="mt-1 inline-block text-xs text-blue-600 underline decoration-blue-300 underline-offset-2"
-              >
-                Lihat rencana video
-              </Link>
-            ) : null}
+            <Link
+              href={`/dashboard/${encodeURIComponent(channel)}`}
+              className="mt-1 inline-block text-xs text-blue-600 underline decoration-blue-300 underline-offset-2"
+            >
+              Lihat rencana video
+            </Link>
           </li>
         ))}
       </ul>

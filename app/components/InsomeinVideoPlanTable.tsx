@@ -4,10 +4,11 @@ import { useMemo, useState } from 'react'
 import type { VideoPlan } from '@/lib/youtube-types'
 
 interface InsomeinVideoPlanTableProps {
+  channelName: string
   plans: VideoPlan[]
 }
 
-export function InsomeinVideoPlanTable({ plans }: InsomeinVideoPlanTableProps) {
+export function InsomeinVideoPlanTable({ channelName, plans }: InsomeinVideoPlanTableProps) {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
   const sortedPlans = useMemo(() => {
@@ -24,7 +25,9 @@ export function InsomeinVideoPlanTable({ plans }: InsomeinVideoPlanTableProps) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold text-slate-900">Rencana Video Harian Insomein</h2>
+        <h2 className="text-xl font-semibold text-slate-900">
+          Rencana Video Harian {channelName}
+        </h2>
         <button
           type="button"
           onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
