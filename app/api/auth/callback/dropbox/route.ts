@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { exchangeCodeForToken } from '@/lib/onedrive-oauth'
+import { exchangeCodeForToken } from '@/lib/dropbox-oauth'
 import { redis } from '@/lib/redis'
 
-const ONEDRIVE_TOKENS_KEY = 'onedrive:tokens'
+const DROPBOX_TOKENS_KEY = 'dropbox:tokens'
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams
@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   const error = searchParams.get('error')
 
   if (error) {
-    return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard?error=onedrive_access_denied`)
+    return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard?error=dropbox_access_denied`)
   }
 
   if (!code) {
@@ -31,11 +31,11 @@ export async function GET(request: NextRequest) {
       expires_at: Date.now() + (tokens.expires_in * 1000),
     }
 
-    await redis.set(ONEDRIVE_TOKENS_KEY, JSON.stringify(tokensWithExpiry))
+    await redis.set(DROPBOX_TOKENS_KEY, JSON.stringify(tokensWithExpiry))
 
-    return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard?success=onedrive_connected`)
+    return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard?success=dropbox_connected`)
   } catch (err) {
-    console.error('OneDrive OAuth callback error:', err)
+    console.error('Dropbox OAuth callback error:', err)
     return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard?error=token_exchange_failed`)
   }
 }

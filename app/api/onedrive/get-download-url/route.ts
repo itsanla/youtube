@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { redis } from '@/lib/redis'
-import { getDownloadUrl } from '@/lib/onedrive-oauth'
+import { getDownloadUrl, getValidAccessToken } from '@/lib/onedrive-oauth'
 
 const ONEDRIVE_TOKENS_KEY = 'onedrive:tokens'
 
@@ -18,7 +18,17 @@ export async function POST(request: NextRequest) {
     }
 
     const tokens = typeof tokensData === 'string' ? JSON.parse(tokensData) : tokensData
-    const downloadUrl = await getDownloadUrl(tokens.access_token, itemId)
+    
+    // Auto-refresh jika token expired
+    const validToken = await getValidAccessToken(tokens)
+    if (typeof validToken === 'object') {
+      await redis.set(ONEDRIVE_TOKENS_KEY, JSON.stringify(validToken))
+      var accessToken = validToken.access_token
+    } else {
+      var accessToken = validToken
+    }
+    
+    const downloadUrl = await getDownloadUrl(accessToken, itemId)
 
     return NextResponse.json({ downloadUrl })
   } catch (error) {

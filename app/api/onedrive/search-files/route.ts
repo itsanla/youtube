@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { redis } from '@/lib/redis'
+import { getValidAccessToken } from '@/lib/onedrive-oauth'
 
 const ONEDRIVE_TOKENS_KEY = 'onedrive:tokens'
 
@@ -21,6 +22,15 @@ export async function GET(request: NextRequest) {
 
     const tokens = typeof tokensData === 'string' ? JSON.parse(tokensData) : tokensData
 
+    // Auto-refresh jika token expired
+    const validToken = await getValidAccessToken(tokens)
+    if (typeof validToken === 'object') {
+      await redis.set(ONEDRIVE_TOKENS_KEY, JSON.stringify(validToken))
+      var accessToken = validToken.access_token
+    } else {
+      var accessToken = validToken
+    }
+
     // Build search query
     const extensions = type === 'video' ? VIDEO_EXTENSIONS : IMAGE_EXTENSIONS
     const extensionQuery = extensions.map(ext => `.${ext}`).join(' OR ')
@@ -34,7 +44,7 @@ export async function GET(request: NextRequest) {
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${searchQuery}')?$orderby=lastModifiedDateTime desc&$top=${limit + offset}&$select=id,name,size,lastModifiedDateTime,file`,
       {
-        headers: { Authorization: `Bearer ${tokens.access_token}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       }
     )
 
