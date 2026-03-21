@@ -1,11 +1,18 @@
 import { NextResponse } from 'next/server'
-import { checkYouTubeConnection } from '@/lib/youtube-upload'
+import { getYouTubeAccounts } from '@/lib/youtube-accounts'
 
 export async function GET() {
   try {
-    const connected = await checkYouTubeConnection()
-    return NextResponse.json({ connected })
+    const accounts = await getYouTubeAccounts()
+    return NextResponse.json({
+      connected: accounts.length > 0,
+      count: accounts.length,
+      accounts: accounts.map((account) => ({
+        id: account.id,
+        title: account.title,
+      })),
+    })
   } catch {
-    return NextResponse.json({ connected: false })
+    return NextResponse.json({ connected: false, count: 0, accounts: [] })
   }
 }

@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 
 interface ConnectionStatus {
   youtube: boolean
+  youtubeCount: number
   onedrive: boolean
   dropbox: boolean
 }
@@ -14,6 +15,7 @@ export function SettingsButton() {
   const [isMounted, setIsMounted] = useState(false)
   const [connections, setConnections] = useState<ConnectionStatus>({
     youtube: false,
+    youtubeCount: 0,
     onedrive: false,
     dropbox: false,
   })
@@ -52,6 +54,7 @@ export function SettingsButton() {
 
       setConnections({
         youtube: youtube.connected || false,
+        youtubeCount: youtube.count || 0,
         onedrive: onedrive.connected || false,
         dropbox: dropbox.connected || false,
       })
@@ -166,25 +169,29 @@ export function SettingsButton() {
                       <div>
                         <p className="font-semibold text-slate-900">YouTube</p>
                         <p className="text-xs text-slate-500">
-                          {connections.youtube ? 'Terhubung' : 'Tidak terhubung'}
+                          {connections.youtube
+                            ? `${connections.youtubeCount} akun terhubung`
+                            : 'Tidak terhubung'}
                         </p>
                       </div>
                     </div>
-                    {connections.youtube ? (
-                      <button
-                        onClick={() => handleDisconnect('youtube')}
-                        className="rounded-lg bg-red-100 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-200"
-                      >
-                        Disconnect
-                      </button>
-                    ) : (
+                    <div className="flex items-center gap-2">
                       <button
                         onClick={() => handleConnect('youtube')}
                         className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
                       >
-                        Connect
+                        {connections.youtube ? 'Add Account' : 'Connect'}
                       </button>
-                    )}
+
+                      {connections.youtube && (
+                        <button
+                          onClick={() => handleDisconnect('youtube')}
+                          className="rounded-lg bg-red-100 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-200"
+                        >
+                          Disconnect All
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* OneDrive */}

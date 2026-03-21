@@ -17,6 +17,6 @@ export function getAuthUrl() {
       'https://www.googleapis.com/auth/youtube.upload',
       'https://www.googleapis.com/auth/youtube',
     ],
-    prompt: 'consent',
+    prompt: 'consent select_account',
   })
 }

@@ -13,6 +13,12 @@ interface UploadRequest {
   description?: string
   privacyStatus?: 'private' | 'public' | 'unlisted'
   categoryId?: string
+  playlistId?: string
+  defaultLanguage?: string
+  defaultAudioLanguage?: string
+  subtitleUrl?: string
+  subtitleLanguage?: string
+  subtitleName?: string
   videoSource: 'local' | 'onedrive'
   videoUrl?: string // OneDrive download URL
   thumbnailSource?: 'local' | 'onedrive'
@@ -76,6 +82,7 @@ async function handleVideoUpload(
     let uploadData: UploadRequest
     let videoStream: ReadableStream<Uint8Array>
     let videoSize = 0
+    let subtitleBlob: Blob | null = null
 
     // Parse request berdasarkan source
     if (contentType.includes('multipart/form-data')) {
@@ -85,6 +92,12 @@ async function handleVideoUpload(
       const title = formData.get('title')
       const description = formData.get('description')
       const privacyStatus = formData.get('privacyStatus')
+      const playlistId = formData.get('playlistId')
+      const defaultLanguage = formData.get('defaultLanguage')
+      const defaultAudioLanguage = formData.get('defaultAudioLanguage')
+      const subtitle = formData.get('subtitle')
+      const subtitleLanguage = formData.get('subtitleLanguage')
+      const subtitleName = formData.get('subtitleName')
       const accessToken = formData.get('accessToken')
 
       // Validate required string fields
@@ -126,8 +139,18 @@ async function handleVideoUpload(
         title,
         description: typeof description === 'string' ? description : undefined,
         privacyStatus: (typeof privacyStatus === 'string' ? privacyStatus : 'private') as any,
+        playlistId: typeof playlistId === 'string' ? playlistId : undefined,
+        defaultLanguage: typeof defaultLanguage === 'string' ? defaultLanguage : 'id',
+        defaultAudioLanguage:
+          typeof defaultAudioLanguage === 'string' ? defaultAudioLanguage : 'id',
+        subtitleLanguage: typeof subtitleLanguage === 'string' ? subtitleLanguage : 'id',
+        subtitleName: typeof subtitleName === 'string' ? subtitleName : 'Subtitle Indonesia',
         videoSource: 'local',
         accessToken,
+      }
+
+      if (subtitle && typeof subtitle !== 'string') {
+        subtitleBlob = subtitle as File
       }
     } else {
       // Upload dari OneDrive (JSON)
@@ -172,6 +195,8 @@ async function handleVideoUpload(
             title: uploadData.title,
             description: uploadData.description || '',
             categoryId: uploadData.categoryId || '22',
+            defaultLanguage: uploadData.defaultLanguage || 'id',
+            defaultAudioLanguage: uploadData.defaultAudioLanguage || 'id',
           },
           status: {
             privacyStatus: uploadData.privacyStatus || 'private',
@@ -214,6 +239,30 @@ async function handleVideoUpload(
       )
     }
 
+    if (uploadData.playlistId && videoId) {
+      await addVideoToPlaylist(videoId, uploadData.playlistId, uploadData.accessToken)
+    }
+
+    if (videoId) {
+      if (subtitleBlob) {
+        await uploadSubtitleFromBlob(
+          videoId,
+          subtitleBlob,
+          uploadData.accessToken,
+          uploadData.subtitleLanguage || uploadData.defaultLanguage || 'id',
+          uploadData.subtitleName || 'Subtitle Indonesia'
+        )
+      } else if (uploadData.subtitleUrl) {
+        await uploadSubtitleFromUrl(
+          videoId,
+          uploadData.subtitleUrl,
+          uploadData.accessToken,
+          uploadData.subtitleLanguage || uploadData.defaultLanguage || 'id',
+          uploadData.subtitleName || 'Subtitle Indonesia'
+        )
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -229,6 +278,108 @@ async function handleVideoUpload(
       JSON.stringify({ error: (error as Error).message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
+  }
+}
+
+async function addVideoToPlaylist(
+  videoId: string,
+  playlistId: string,
+  accessToken: string
+): Promise<void> {
+  const response = await fetch(
+    'https://www.googleapis.com/youtube/v3/playlistItems?part=snippet',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        snippet: {
+          playlistId,
+          resourceId: {
+            kind: 'youtube#video',
+            videoId,
+          },
+        },
+      }),
+    }
+  )
+
+  if (!response.ok) {
+    console.error('Failed to add video to playlist:', await response.text())
+  }
+}
+
+async function uploadSubtitleFromUrl(
+  videoId: string,
+  subtitleUrl: string,
+  accessToken: string,
+  language: string,
+  subtitleName: string
+): Promise<void> {
+  const subtitleResponse = await fetch(subtitleUrl)
+  if (!subtitleResponse.ok) {
+    console.error('Failed to fetch subtitle from URL')
+    return
+  }
+
+  const subtitleBlob = await subtitleResponse.blob()
+  await uploadSubtitleFromBlob(videoId, subtitleBlob, accessToken, language, subtitleName)
+}
+
+async function uploadSubtitleFromBlob(
+  videoId: string,
+  subtitleBlob: Blob,
+  accessToken: string,
+  language: string,
+  subtitleName: string
+): Promise<void> {
+  const response = await fetch(
+    'https://www.googleapis.com/upload/youtube/v3/captions?part=snippet&sync=false',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': subtitleBlob.type || 'application/octet-stream',
+      },
+      body: subtitleBlob,
+    }
+  )
+
+  if (!response.ok) {
+    console.error('Failed to upload subtitle:', await response.text())
+    return
+  }
+
+  const captionData = await response.json() as { id?: string }
+
+  if (!captionData.id) {
+    return
+  }
+
+  const patchResponse = await fetch(
+    'https://www.googleapis.com/youtube/v3/captions?part=snippet',
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        id: captionData.id,
+        snippet: {
+          videoId,
+          language,
+          name: subtitleName,
+          isDraft: false,
+        },
+      }),
+    }
+  )
+
+  if (!patchResponse.ok) {
+    console.error('Failed to set subtitle metadata:', await patchResponse.text())
   }
 }
 

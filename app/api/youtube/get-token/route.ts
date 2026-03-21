@@ -1,23 +1,14 @@
 import { NextResponse } from 'next/server'
-import { redis } from '@/lib/redis'
+import { getYouTubeAccessToken } from '@/lib/youtube-accounts'
 
-const YOUTUBE_TOKENS_KEY = 'youtube:tokens'
-
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const tokensData = await redis.get(YOUTUBE_TOKENS_KEY)
-    
-    if (!tokensData) {
-      return NextResponse.json(
-        { error: 'YouTube belum terkoneksi' },
-        { status: 401 }
-      )
-    }
-
-    const tokens = typeof tokensData === 'string' ? JSON.parse(tokensData) : tokensData
+    const url = new URL(request.url)
+    const accountId = url.searchParams.get('accountId') || undefined
+    const accessToken = await getYouTubeAccessToken(accountId)
 
     return NextResponse.json({
-      accessToken: tokens.access_token,
+      accessToken,
     })
   } catch (error) {
     return NextResponse.json(
