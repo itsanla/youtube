@@ -19,11 +19,19 @@ export async function GET(request: NextRequest) {
     const oauth2Client = getOAuth2Client()
     const { tokens } = await oauth2Client.getToken(code)
 
-    if (!tokens.access_token && !tokens.refresh_token) {
+    const normalizedTokens = {
+      access_token: tokens.access_token ?? undefined,
+      refresh_token: tokens.refresh_token ?? undefined,
+      scope: tokens.scope ?? undefined,
+      token_type: tokens.token_type ?? undefined,
+      expiry_date: tokens.expiry_date ?? undefined,
+    }
+
+    if (!normalizedTokens.access_token && !normalizedTokens.refresh_token) {
       return NextResponse.redirect(`${process.env.NEXTAUTH_URL}/dashboard?error=no_access_token`)
     }
 
-    const connectedAccount = await addOrUpdateYouTubeAccount(tokens)
+    const connectedAccount = await addOrUpdateYouTubeAccount(normalizedTokens)
 
     return NextResponse.redirect(
       `${process.env.NEXTAUTH_URL}/dashboard?success=connected&youtubeChannel=${encodeURIComponent(connectedAccount.title)}`
