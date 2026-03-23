@@ -205,6 +205,7 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    const formElement = e.currentTarget
     setUploading(true)
     setUploadProgress(0)
     setResult(null)
@@ -230,7 +231,7 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
       }
       const { accessToken } = await tokenResponse.json()
 
-      const formData = new FormData(e.currentTarget)
+      const formData = new FormData(formElement)
       const titleId = (formData.get('titleId') as string) || ''
       const descriptionId = (formData.get('descriptionId') as string) || ''
       const titleEn = (formData.get('titleEn') as string) || ''
