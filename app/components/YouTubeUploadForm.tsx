@@ -26,6 +26,19 @@ interface YouTubePlaylist {
   itemCount: number
 }
 
+function debugTextMeta(value: string) {
+  const trimmed = value.trim()
+  const codePoints = Array.from(value).slice(0, 12).map((char) => char.codePointAt(0))
+
+  return {
+    raw: value,
+    rawLength: value.length,
+    trimmed,
+    trimmedLength: trimmed.length,
+    firstCodePoints: codePoints,
+  }
+}
+
 export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
   const searchParams = useSearchParams()
   const [uploading, setUploading] = useState(false)
@@ -239,7 +252,20 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
       const privacyStatus = formData.get('privacyStatus') as string
       const playlistId = (formData.get('playlistId') as string) || ''
 
+      console.groupCollapsed('[YouTubeUpload] Submit Debug')
+      console.debug('selectedAccountId:', selectedAccountId)
+      console.debug('isLocalVideo:', videoFile instanceof File)
+      console.debug('titleId meta:', debugTextMeta(titleId))
+      console.debug('titleEn meta:', debugTextMeta(titleEn))
+      console.debug('privacyStatus:', privacyStatus)
+      console.debug('playlistId:', playlistId || '(empty)')
+      console.groupEnd()
+
       if (!titleId || !titleEn) {
+        console.error('[YouTubeUpload] Validation failed: titleId/titleEn empty after trim', {
+          titleIdMeta: debugTextMeta(titleId),
+          titleEnMeta: debugTextMeta(titleEn),
+        })
         setResult({ success: false, message: 'Judul Indonesia dan Inggris wajib diisi' })
         setUploading(false)
         return
@@ -265,6 +291,14 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
           uploadFormData.append('thumbnail', thumbnailFile)
         }
 
+        console.debug('[YouTubeUpload] Local upload payload preview', {
+          title: titleId,
+          descriptionLength: descriptionId.length,
+          hasThumbnail: !!thumbnailFile,
+          defaultLanguage: 'id',
+          defaultAudioLanguage: 'id',
+        })
+
         const xhr = new XMLHttpRequest()
 
         xhr.upload.addEventListener('progress', (event) => {
@@ -277,6 +311,10 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
         const response = await new Promise<{ ok: boolean; data: any }>((resolve, reject) => {
           xhr.addEventListener('load', () => {
             try {
+              console.debug('[YouTubeUpload] Worker response (local)', {
+                status: xhr.status,
+                responseText: xhr.responseText,
+              })
               const data = JSON.parse(xhr.responseText)
               resolve({ ok: xhr.status === 200, data })
             } catch {
@@ -346,6 +384,13 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
         })
 
         const data = await response.json()
+
+        console.debug('[YouTubeUpload] Worker response (OneDrive)', {
+          status: response.status,
+          responseBody: data,
+          sentTitle: titleId,
+          sentTitleLength: titleId.length,
+        })
 
         if (response.ok) {
           const postUploadWarning = data.videoId
