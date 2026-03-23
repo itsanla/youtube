@@ -232,10 +232,10 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
       const { accessToken } = await tokenResponse.json()
 
       const formData = new FormData(formElement)
-      const titleId = (formData.get('titleId') as string) || ''
-      const descriptionId = (formData.get('descriptionId') as string) || ''
-      const titleEn = (formData.get('titleEn') as string) || ''
-      const descriptionEn = (formData.get('descriptionEn') as string) || ''
+      const titleId = ((formData.get('titleId') as string) || '').trim()
+      const descriptionId = ((formData.get('descriptionId') as string) || '').trim()
+      const titleEn = ((formData.get('titleEn') as string) || '').trim()
+      const descriptionEn = ((formData.get('descriptionEn') as string) || '').trim()
       const privacyStatus = formData.get('privacyStatus') as string
       const playlistId = (formData.get('playlistId') as string) || ''
 

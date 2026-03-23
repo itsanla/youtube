@@ -108,6 +108,14 @@ async function handleVideoUpload(
         )
       }
 
+      const cleanedTitle = title.trim()
+      if (!cleanedTitle) {
+        return new Response(
+          JSON.stringify({ error: 'Video title tidak boleh kosong' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
       if (!accessToken || typeof accessToken !== 'string') {
         return new Response(
           JSON.stringify({ error: 'Missing access token' }),
@@ -136,7 +144,7 @@ async function handleVideoUpload(
       videoSize = video.size
 
       uploadData = {
-        title,
+        title: cleanedTitle,
         description: typeof description === 'string' ? description : undefined,
         privacyStatus: (typeof privacyStatus === 'string' ? privacyStatus : 'private') as any,
         playlistId: typeof playlistId === 'string' ? playlistId : undefined,
