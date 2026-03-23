@@ -547,6 +547,10 @@ async function uploadVideoChunked(
 
     if (pendingChunk) {
       const chunk: Uint8Array = pendingChunk
+      const chunkBuffer = chunk.buffer.slice(
+        chunk.byteOffset,
+        chunk.byteOffset + chunk.byteLength
+      ) as ArrayBuffer
 
       const startByte = uploadedBytes
       const endByte = uploadedBytes + chunk.length - 1
@@ -557,7 +561,7 @@ async function uploadVideoChunked(
           'Content-Length': chunk.length.toString(),
           'Content-Range': `bytes ${startByte}-${endByte}/${totalSize}`,
         },
-        body: chunk,
+        body: chunkBuffer,
       })
 
       if (!uploadResponse.ok && uploadResponse.status !== 308) {
