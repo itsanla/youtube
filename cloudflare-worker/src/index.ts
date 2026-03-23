@@ -28,6 +28,14 @@ interface UploadRequest {
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10MB per chunk
 
+function sanitizeVideoTitle(input: string): string {
+  return input
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     // CORS headers
@@ -108,10 +116,20 @@ async function handleVideoUpload(
         )
       }
 
-      const cleanedTitle = title.trim()
+      const cleanedTitle = sanitizeVideoTitle(title)
       if (!cleanedTitle) {
         return new Response(
           JSON.stringify({ error: 'Video title tidak boleh kosong' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (cleanedTitle.length > 100) {
+        return new Response(
+          JSON.stringify({
+            error: 'Video title terlalu panjang (maksimal 100 karakter)',
+            debug: { titleLength: cleanedTitle.length },
+          }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
@@ -171,6 +189,26 @@ async function handleVideoUpload(
         )
       }
 
+      const cleanedTitle = sanitizeVideoTitle(uploadData.title)
+      if (!cleanedTitle) {
+        return new Response(
+          JSON.stringify({ error: 'Video title tidak boleh kosong' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (cleanedTitle.length > 100) {
+        return new Response(
+          JSON.stringify({
+            error: 'Video title terlalu panjang (maksimal 100 karakter)',
+            debug: { titleLength: cleanedTitle.length },
+          }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      uploadData.title = cleanedTitle
+
       // Fetch video dari OneDrive
       const videoResponse = await fetch(uploadData.videoUrl)
       if (!videoResponse.ok) {
@@ -216,7 +254,15 @@ async function handleVideoUpload(
     if (!initResponse.ok) {
       const error = await initResponse.text()
       return new Response(
-        JSON.stringify({ error: `YouTube init failed: ${error}` }),
+        JSON.stringify({
+          error: `YouTube init failed: ${error}`,
+          debug: {
+            title: uploadData.title,
+            titleLength: uploadData.title.length,
+            defaultLanguage: uploadData.defaultLanguage || 'id',
+            defaultAudioLanguage: uploadData.defaultAudioLanguage || 'id',
+          },
+        }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }

@@ -253,12 +253,12 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
       const playlistId = (formData.get('playlistId') as string) || ''
 
       console.groupCollapsed('[YouTubeUpload] Submit Debug')
-      console.debug('selectedAccountId:', selectedAccountId)
-      console.debug('isLocalVideo:', videoFile instanceof File)
-      console.debug('titleId meta:', debugTextMeta(titleId))
-      console.debug('titleEn meta:', debugTextMeta(titleEn))
-      console.debug('privacyStatus:', privacyStatus)
-      console.debug('playlistId:', playlistId || '(empty)')
+      console.log('selectedAccountId:', selectedAccountId)
+      console.log('isLocalVideo:', videoFile instanceof File)
+      console.log('titleId meta:', debugTextMeta(titleId))
+      console.log('titleEn meta:', debugTextMeta(titleEn))
+      console.log('privacyStatus:', privacyStatus)
+      console.log('playlistId:', playlistId || '(empty)')
       console.groupEnd()
 
       if (!titleId || !titleEn) {
@@ -291,7 +291,7 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
           uploadFormData.append('thumbnail', thumbnailFile)
         }
 
-        console.debug('[YouTubeUpload] Local upload payload preview', {
+        console.log('[YouTubeUpload] Local upload payload preview', {
           title: titleId,
           descriptionLength: descriptionId.length,
           hasThumbnail: !!thumbnailFile,
@@ -311,7 +311,7 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
         const response = await new Promise<{ ok: boolean; data: any }>((resolve, reject) => {
           xhr.addEventListener('load', () => {
             try {
-              console.debug('[YouTubeUpload] Worker response (local)', {
+              console.log('[YouTubeUpload] Worker response (local)', {
                 status: xhr.status,
                 responseText: xhr.responseText,
               })
@@ -385,7 +385,7 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
 
         const data = await response.json()
 
-        console.debug('[YouTubeUpload] Worker response (OneDrive)', {
+        console.log('[YouTubeUpload] Worker response (OneDrive)', {
           status: response.status,
           responseBody: data,
           sentTitle: titleId,
