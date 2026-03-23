@@ -36,6 +36,26 @@ function sanitizeVideoTitle(input: string): string {
     .trim()
 }
 
+async function fetchWithRetry(url: string, attempts = 2): Promise<Response> {
+  let lastError: unknown = null
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetch(url, {
+        method: 'GET',
+        redirect: 'follow',
+      })
+    } catch (error) {
+      lastError = error
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300))
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error('Network connection lost')
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     // CORS headers
@@ -84,6 +104,7 @@ async function handleVideoUpload(
   env: Env,
   corsHeaders: Record<string, string>
 ): Promise<Response> {
+  let currentStage = 'init'
   try {
     const contentType = request.headers.get('content-type') || ''
 
@@ -94,6 +115,7 @@ async function handleVideoUpload(
 
     // Parse request berdasarkan source
     if (contentType.includes('multipart/form-data')) {
+      currentStage = 'parse_multipart_form'
       // Upload dari local (FormData)
       const formData = await request.formData()
       const videoFile = formData.get('video')
@@ -179,6 +201,7 @@ async function handleVideoUpload(
         subtitleBlob = subtitle as File
       }
     } else {
+      currentStage = 'parse_json_payload'
       // Upload dari OneDrive (JSON)
       uploadData = await request.json() as UploadRequest
 
@@ -209,11 +232,21 @@ async function handleVideoUpload(
 
       uploadData.title = cleanedTitle
 
+      currentStage = 'fetch_video_from_onedrive'
       // Fetch video dari OneDrive
-      const videoResponse = await fetch(uploadData.videoUrl)
+      const videoResponse = await fetchWithRetry(uploadData.videoUrl, 2)
       if (!videoResponse.ok) {
+        const errorBody = await videoResponse.text()
         return new Response(
-          JSON.stringify({ error: 'Failed to fetch video from OneDrive' }),
+          JSON.stringify({
+            error: 'Failed to fetch video from OneDrive',
+            debug: {
+              stage: currentStage,
+              status: videoResponse.status,
+              statusText: videoResponse.statusText,
+              responseBodyPreview: errorBody.slice(0, 400),
+            },
+          }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
       }
@@ -223,6 +256,7 @@ async function handleVideoUpload(
     }
 
     // Generate upload ID untuk tracking
+    currentStage = 'init_resumable_upload'
     const uploadId = crypto.randomUUID()
 
     // Initialize YouTube resumable upload
@@ -276,6 +310,7 @@ async function handleVideoUpload(
     }
 
     // Upload video dengan streaming chunked
+    currentStage = 'upload_chunked_video'
     const videoId = await uploadVideoChunked(
       videoStream,
       uploadUrl,
@@ -286,6 +321,7 @@ async function handleVideoUpload(
 
     // Upload thumbnail jika ada
     if (uploadData.thumbnailUrl && videoId) {
+      currentStage = 'upload_thumbnail'
       await uploadThumbnailFromUrl(
         videoId,
         uploadData.thumbnailUrl,
@@ -294,11 +330,13 @@ async function handleVideoUpload(
     }
 
     if (uploadData.playlistId && videoId) {
+      currentStage = 'add_video_to_playlist'
       await addVideoToPlaylist(videoId, uploadData.playlistId, uploadData.accessToken)
     }
 
     if (videoId) {
       if (subtitleBlob) {
+        currentStage = 'upload_subtitle_blob'
         await uploadSubtitleFromBlob(
           videoId,
           subtitleBlob,
@@ -307,6 +345,7 @@ async function handleVideoUpload(
           uploadData.subtitleName || 'Subtitle Indonesia'
         )
       } else if (uploadData.subtitleUrl) {
+        currentStage = 'upload_subtitle_url'
         await uploadSubtitleFromUrl(
           videoId,
           uploadData.subtitleUrl,
@@ -329,7 +368,12 @@ async function handleVideoUpload(
   } catch (error) {
     console.error('Upload error:', error)
     return new Response(
-      JSON.stringify({ error: (error as Error).message }),
+      JSON.stringify({
+        error: (error as Error).message,
+        debug: {
+          stage: currentStage,
+        },
+      }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
@@ -444,35 +488,73 @@ async function uploadVideoChunked(
   uploadId: string,
   env: Env
 ): Promise<string> {
+  if (!Number.isFinite(totalSize) || totalSize <= 0) {
+    throw new Error('Ukuran video tidak valid untuk resumable upload')
+  }
+
   const reader = stream.getReader()
   let uploadedBytes = 0
   let buffer: Uint8Array[] = []
   let bufferSize = 0
+  let pendingChunk: Uint8Array | null = null
 
-  while (true) {
-    const { done, value } = await reader.read()
-
-    if (value) {
-      buffer.push(value)
-      bufferSize += value.length
+  const getAckedBytes = (response: Response): number => {
+    const rangeHeader = response.headers.get('Range') || response.headers.get('range')
+    if (!rangeHeader) {
+      return uploadedBytes
     }
 
-    // Upload chunk jika buffer >= CHUNK_SIZE atau stream selesai
-    if (bufferSize >= CHUNK_SIZE || (done && bufferSize > 0)) {
-      const chunk = new Uint8Array(bufferSize)
-      let offset = 0
-      for (const arr of buffer) {
-        chunk.set(arr, offset)
-        offset += arr.length
+    const match = /bytes=0-(\d+)/.exec(rangeHeader)
+    if (!match) {
+      return uploadedBytes
+    }
+
+    const acknowledgedEnd = parseInt(match[1], 10)
+    if (!Number.isFinite(acknowledgedEnd) || acknowledgedEnd < 0) {
+      return uploadedBytes
+    }
+
+    return acknowledgedEnd + 1
+  }
+
+  while (true) {
+    if (!pendingChunk) {
+      const { done, value } = await reader.read()
+
+      if (value) {
+        buffer.push(value)
+        bufferSize += value.length
       }
 
+      // Upload chunk jika buffer >= CHUNK_SIZE atau stream selesai
+      if (bufferSize >= CHUNK_SIZE || (done && bufferSize > 0)) {
+        const chunk = new Uint8Array(bufferSize)
+        let offset = 0
+        for (const arr of buffer) {
+          chunk.set(arr, offset)
+          offset += arr.length
+        }
+
+        pendingChunk = chunk
+        buffer = []
+        bufferSize = 0
+      }
+
+      if (done && !pendingChunk) {
+        break
+      }
+    }
+
+    if (pendingChunk) {
+      const chunk: Uint8Array = pendingChunk
+
       const startByte = uploadedBytes
-      const endByte = uploadedBytes + bufferSize - 1
+      const endByte = uploadedBytes + chunk.length - 1
 
       const uploadResponse = await fetch(uploadUrl, {
         method: 'PUT',
         headers: {
-          'Content-Length': bufferSize.toString(),
+          'Content-Length': chunk.length.toString(),
           'Content-Range': `bytes ${startByte}-${endByte}/${totalSize}`,
         },
         body: chunk,
@@ -482,23 +564,26 @@ async function uploadVideoChunked(
         throw new Error(`Upload chunk failed: ${await uploadResponse.text()}`)
       }
 
-      uploadedBytes += bufferSize
-
-      // Update progress ke Redis
-      await updateProgress(env, uploadId, uploadedBytes, totalSize)
-
-      // Reset buffer
-      buffer = []
-      bufferSize = 0
-
       // Jika upload selesai, ambil video ID
       if (uploadResponse.status === 200 || uploadResponse.status === 201) {
         const result = await uploadResponse.json() as any
         return result.id
       }
-    }
 
-    if (done) break
+      const ackedBytes = getAckedBytes(uploadResponse)
+      const acceptedInThisChunk = Math.max(0, Math.min(chunk.length, ackedBytes - startByte))
+
+      if (acceptedInThisChunk >= chunk.length) {
+        pendingChunk = null
+      } else if (acceptedInThisChunk > 0) {
+        pendingChunk = chunk.slice(acceptedInThisChunk)
+      }
+
+      uploadedBytes = ackedBytes
+
+      // Update progress ke Redis
+      await updateProgress(env, uploadId, uploadedBytes, totalSize)
+    }
   }
 
   throw new Error('Upload completed but no video ID received')

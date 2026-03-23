@@ -355,9 +355,15 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
           setSubtitleFileEn(null)
           setUploadProgress(0)
         } else {
+          console.error('[YouTubeUpload] Upload failed (local)', response.data)
           setResult({
             success: false,
-            message: response.data.error || 'Upload gagal',
+            message:
+              response.data?.error +
+                (response.data?.debug?.stage
+                  ? ` (stage: ${response.data.debug.stage})`
+                  : '') ||
+              'Upload gagal',
           })
         }
       } else {
@@ -417,9 +423,15 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
           setSubtitleFileId(null)
           setSubtitleFileEn(null)
         } else {
+          console.error('[YouTubeUpload] Upload failed (OneDrive)', data)
           setResult({
             success: false,
-            message: data.error || 'Upload gagal',
+            message:
+              data?.error +
+                (data?.debug?.stage
+                  ? ` (stage: ${data.debug.stage})`
+                  : '') ||
+              'Upload gagal',
           })
         }
       }
