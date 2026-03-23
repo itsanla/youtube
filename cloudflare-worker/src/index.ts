@@ -27,6 +27,7 @@ interface UploadRequest {
 }
 
 const CHUNK_SIZE = 10 * 1024 * 1024 // 10MB per chunk
+const MIN_RESUMABLE_CHUNK_SIZE = 256 * 1024 // 256KB
 
 function sanitizeVideoTitle(input: string): string {
   return input
@@ -497,6 +498,14 @@ async function uploadVideoChunked(
   let buffer: Uint8Array[] = []
   let bufferSize = 0
   let pendingChunk: Uint8Array | null = null
+  let streamDone = false
+
+  const concatUint8Arrays = (a: Uint8Array, b: Uint8Array): Uint8Array => {
+    const merged = new Uint8Array(a.length + b.length)
+    merged.set(a, 0)
+    merged.set(b, a.length)
+    return merged
+  }
 
   const getAckedBytes = (response: Response): number => {
     const rangeHeader = response.headers.get('Range') || response.headers.get('range')
@@ -520,6 +529,7 @@ async function uploadVideoChunked(
   while (true) {
     if (!pendingChunk) {
       const { done, value } = await reader.read()
+      streamDone = done
 
       if (value) {
         buffer.push(value)
@@ -540,12 +550,31 @@ async function uploadVideoChunked(
         bufferSize = 0
       }
 
-      if (done && !pendingChunk) {
+      if (streamDone && !pendingChunk) {
         break
       }
     }
 
     if (pendingChunk) {
+      // YouTube requires non-final resumable chunks to be >= 256KB.
+      // If we have a tiny remainder after partial ack, append bytes from stream first.
+      while (
+        pendingChunk.length < MIN_RESUMABLE_CHUNK_SIZE &&
+        uploadedBytes + pendingChunk.length < totalSize &&
+        !streamDone
+      ) {
+        const { done, value } = await reader.read()
+        streamDone = done
+
+        if (value && value.length > 0) {
+          pendingChunk = concatUint8Arrays(pendingChunk, value)
+        }
+
+        if (streamDone) {
+          break
+        }
+      }
+
       const chunk: Uint8Array = pendingChunk
       const chunkBuffer = chunk.buffer.slice(
         chunk.byteOffset,
