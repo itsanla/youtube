@@ -29,9 +29,6 @@ interface UploadRequest {
 const CHUNK_SIZE = 64 * 1024 * 1024 // 64MB per chunk
 const MIN_RESUMABLE_CHUNK_SIZE = 256 * 1024 // 256KB
 const PROGRESS_UPDATE_INTERVAL = 50 * 1024 * 1024 // 50MB
-const MAX_CHUNK_SIZE = 256 * 1024 * 1024 // 256MB safety cap
-const TARGET_MAX_CHUNKS = 40
-const HARD_MAX_CHUNKS = 45
 
 function sanitizeVideoTitle(input: string): string {
   return input
@@ -267,9 +264,9 @@ async function handleVideoUpload(
 
     if (uploadData.videoSource === 'onedrive') {
       // OneDrive source: single-stream upload avoids Worker subrequest limits.
-      // Do not fallback to chunked here because large files can exceed Cloudflare subrequest caps.
       // If stream upload breaks, retry with a fresh stream and a fresh resumable session.
-      const maxSingleStreamAttempts = 2
+      // We intentionally avoid chunked fallback for OneDrive to prevent subrequest-limit failures.
+      const maxSingleStreamAttempts = 3
       let lastUploadError: unknown = null
 
       for (let attempt = 1; attempt <= maxSingleStreamAttempts; attempt++) {
@@ -305,33 +302,14 @@ async function handleVideoUpload(
       }
 
       if (!videoId) {
-        currentStage = 'prepare_chunked_fallback_after_single_stream'
-        const fallbackVideo = await getOneDriveVideoStream(uploadData.videoUrl!)
-        const fallbackVideoSize = fallbackVideo.size || videoSize
-        const chunkPlan = getChunkPlanForWorkerLimit(fallbackVideoSize)
+        currentStage = 'single_stream_retries_exhausted'
+        const originalMessage =
+          lastUploadError instanceof Error
+            ? lastUploadError.message
+            : 'Unknown upload failure'
 
-        if (!chunkPlan.feasible) {
-          throw new Error(
-            `Video terlalu besar untuk diproses stabil via Worker (perkiraan ${chunkPlan.estimatedChunks} chunk). ` +
-            `Silakan kecilkan ukuran video atau upload lokal.`
-          )
-        }
-
-        currentStage = 'init_resumable_upload_chunked_fallback'
-        const chunkedUploadUrl = await initYouTubeResumableUpload(uploadData, fallbackVideoSize)
-
-        currentStage = 'upload_chunked_video_fallback_controlled'
-        videoId = await uploadVideoChunked(
-          fallbackVideo.stream,
-          chunkedUploadUrl,
-          fallbackVideoSize,
-          uploadId,
-          env,
-          {
-            disableProgress: true,
-            chunkSize: chunkPlan.chunkSize,
-            maxChunks: HARD_MAX_CHUNKS,
-          }
+        throw new Error(
+          `OneDrive upload gagal setelah 3 percobaan single-stream. ${originalMessage}`
         )
       }
     } else {
@@ -462,35 +440,6 @@ async function getOneDriveVideoStream(
   return {
     stream: response.body,
     size: Number.isFinite(size) ? size : 0,
-  }
-}
-
-function getChunkPlanForWorkerLimit(totalSize: number): {
-  chunkSize: number
-  estimatedChunks: number
-  feasible: boolean
-} {
-  if (!Number.isFinite(totalSize) || totalSize <= 0) {
-    return {
-      chunkSize: CHUNK_SIZE,
-      estimatedChunks: 1,
-      feasible: true,
-    }
-  }
-
-  const requiredPerChunk = Math.ceil(totalSize / TARGET_MAX_CHUNKS)
-  const roundedRequired = Math.ceil(requiredPerChunk / MIN_RESUMABLE_CHUNK_SIZE) * MIN_RESUMABLE_CHUNK_SIZE
-  const chunkSize = Math.min(
-    MAX_CHUNK_SIZE,
-    Math.max(CHUNK_SIZE, roundedRequired)
-  )
-
-  const estimatedChunks = Math.ceil(totalSize / chunkSize)
-
-  return {
-    chunkSize,
-    estimatedChunks,
-    feasible: estimatedChunks <= HARD_MAX_CHUNKS,
   }
 }
 

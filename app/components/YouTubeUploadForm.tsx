@@ -371,25 +371,51 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
         const videoOneDrive = videoFile as OneDriveFile
         const thumbnailOneDrive = thumbnailFile as OneDriveFile | null
 
-        const response = await fetch('/api/youtube/upload-worker', {
+        const oneDrivePayload = {
+          title: titleId,
+          description: descriptionId,
+          privacyStatus,
+          channelName: selectedAccount?.title || selectedAccountId,
+          defaultLanguage: 'id',
+          defaultAudioLanguage: 'id',
+          videoSource: 'onedrive' as const,
+          videoUrl: videoOneDrive.downloadUrl,
+          thumbnailSource: thumbnailOneDrive ? 'onedrive' as const : undefined,
+          thumbnailUrl: thumbnailOneDrive?.downloadUrl,
+          accessToken,
+        }
+
+        let response = await fetch('/api/youtube/upload-worker', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: titleId,
-            description: descriptionId,
-            privacyStatus,
-            channelName: selectedAccount?.title || selectedAccountId,
-            defaultLanguage: 'id',
-            defaultAudioLanguage: 'id',
-            videoSource: 'onedrive',
-            videoUrl: videoOneDrive.downloadUrl,
-            thumbnailSource: thumbnailOneDrive ? 'onedrive' : undefined,
-            thumbnailUrl: thumbnailOneDrive?.downloadUrl,
-            accessToken,
-          }),
+          body: JSON.stringify(oneDrivePayload),
         })
 
-        const data = await response.json()
+        let data: any = null
+        try {
+          data = await response.json()
+        } catch {
+          data = { error: 'Invalid proxy response' }
+        }
+
+        if (!response.ok) {
+          console.warn('[YouTubeUpload] Proxy upload failed, retrying direct worker upload', {
+            proxyStatus: response.status,
+            proxyBody: data,
+          })
+
+          response = await fetch(`${WORKER_URL}/upload-video`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(oneDrivePayload),
+          })
+
+          try {
+            data = await response.json()
+          } catch {
+            data = { error: 'Invalid worker response after proxy fallback' }
+          }
+        }
 
         console.log('[YouTubeUpload] Worker response (OneDrive)', {
           status: response.status,
