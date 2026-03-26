@@ -371,7 +371,7 @@ export function YouTubeUploadForm({ youtubeAccounts }: YouTubeUploadFormProps) {
         const videoOneDrive = videoFile as OneDriveFile
         const thumbnailOneDrive = thumbnailFile as OneDriveFile | null
 
-        const response = await fetch(`${WORKER_URL}/upload-video`, {
+        const response = await fetch('/api/youtube/upload-worker', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

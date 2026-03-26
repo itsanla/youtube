@@ -26,8 +26,12 @@ interface UploadRequest {
   accessToken: string // YouTube access token dari Redis
 }
 
-const CHUNK_SIZE = 10 * 1024 * 1024 // 10MB per chunk
+const CHUNK_SIZE = 64 * 1024 * 1024 // 64MB per chunk
 const MIN_RESUMABLE_CHUNK_SIZE = 256 * 1024 // 256KB
+const PROGRESS_UPDATE_INTERVAL = 50 * 1024 * 1024 // 50MB
+const MAX_CHUNK_SIZE = 256 * 1024 * 1024 // 256MB safety cap
+const TARGET_MAX_CHUNKS = 40
+const HARD_MAX_CHUNKS = 45
 
 function sanitizeVideoTitle(input: string): string {
   return input
@@ -257,68 +261,92 @@ async function handleVideoUpload(
     }
 
     // Generate upload ID untuk tracking
-    currentStage = 'init_resumable_upload'
     const uploadId = crypto.randomUUID()
 
-    // Initialize YouTube resumable upload
-    const initResponse = await fetch(
-      'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${uploadData.accessToken}`,
-          'Content-Type': 'application/json',
-          'X-Upload-Content-Length': videoSize.toString(),
-          'X-Upload-Content-Type': 'video/*',
-        },
-        body: JSON.stringify({
-          snippet: {
-            title: uploadData.title,
-            description: uploadData.description || '',
-            categoryId: uploadData.categoryId || '22',
-            defaultLanguage: uploadData.defaultLanguage || 'id',
-            defaultAudioLanguage: uploadData.defaultAudioLanguage || 'id',
-          },
-          status: {
-            privacyStatus: uploadData.privacyStatus || 'private',
-          },
-        }),
+    let videoId = ''
+
+    if (uploadData.videoSource === 'onedrive') {
+      // OneDrive source: single-stream upload avoids Worker subrequest limits.
+      // Do not fallback to chunked here because large files can exceed Cloudflare subrequest caps.
+      // If stream upload breaks, retry with a fresh stream and a fresh resumable session.
+      const maxSingleStreamAttempts = 2
+      let lastUploadError: unknown = null
+
+      for (let attempt = 1; attempt <= maxSingleStreamAttempts; attempt++) {
+        const attemptLabel = `attempt_${attempt}`
+        try {
+          let attemptVideoStream = videoStream
+          let attemptVideoSize = videoSize
+
+          if (attempt > 1) {
+            const refreshedVideo = await getOneDriveVideoStream(uploadData.videoUrl!)
+            attemptVideoStream = refreshedVideo.stream
+            attemptVideoSize = refreshedVideo.size || videoSize
+          }
+
+          currentStage = `init_resumable_upload_${attemptLabel}`
+          const uploadUrl = await initYouTubeResumableUpload(uploadData, attemptVideoSize)
+
+          currentStage = `upload_single_stream_video_${attemptLabel}`
+          videoId = await uploadVideoSingleStream(
+            attemptVideoStream,
+            uploadUrl,
+            attemptVideoSize,
+            uploadId,
+            env
+          )
+
+          lastUploadError = null
+          break
+        } catch (error) {
+          lastUploadError = error
+          console.error(`OneDrive single-stream ${attemptLabel} failed:`, error)
+        }
       }
-    )
 
-    if (!initResponse.ok) {
-      const error = await initResponse.text()
-      return new Response(
-        JSON.stringify({
-          error: `YouTube init failed: ${error}`,
-          debug: {
-            title: uploadData.title,
-            titleLength: uploadData.title.length,
-            defaultLanguage: uploadData.defaultLanguage || 'id',
-            defaultAudioLanguage: uploadData.defaultAudioLanguage || 'id',
-          },
-        }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      if (!videoId) {
+        currentStage = 'prepare_chunked_fallback_after_single_stream'
+        const fallbackVideo = await getOneDriveVideoStream(uploadData.videoUrl!)
+        const fallbackVideoSize = fallbackVideo.size || videoSize
+        const chunkPlan = getChunkPlanForWorkerLimit(fallbackVideoSize)
+
+        if (!chunkPlan.feasible) {
+          throw new Error(
+            `Video terlalu besar untuk diproses stabil via Worker (perkiraan ${chunkPlan.estimatedChunks} chunk). ` +
+            `Silakan kecilkan ukuran video atau upload lokal.`
+          )
+        }
+
+        currentStage = 'init_resumable_upload_chunked_fallback'
+        const chunkedUploadUrl = await initYouTubeResumableUpload(uploadData, fallbackVideoSize)
+
+        currentStage = 'upload_chunked_video_fallback_controlled'
+        videoId = await uploadVideoChunked(
+          fallbackVideo.stream,
+          chunkedUploadUrl,
+          fallbackVideoSize,
+          uploadId,
+          env,
+          {
+            disableProgress: true,
+            chunkSize: chunkPlan.chunkSize,
+            maxChunks: HARD_MAX_CHUNKS,
+          }
+        )
+      }
+    } else {
+      currentStage = 'init_resumable_upload'
+      const uploadUrl = await initYouTubeResumableUpload(uploadData, videoSize)
+
+      currentStage = 'upload_chunked_video'
+      videoId = await uploadVideoChunked(
+        videoStream,
+        uploadUrl,
+        videoSize,
+        uploadId,
+        env
       )
     }
-
-    const uploadUrl = initResponse.headers.get('location')
-    if (!uploadUrl) {
-      return new Response(
-        JSON.stringify({ error: 'No upload URL received' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // Upload video dengan streaming chunked
-    currentStage = 'upload_chunked_video'
-    const videoId = await uploadVideoChunked(
-      videoStream,
-      uploadUrl,
-      videoSize,
-      uploadId,
-      env
-    )
 
     // Upload thumbnail jika ada
     if (uploadData.thumbnailUrl && videoId) {
@@ -377,6 +405,92 @@ async function handleVideoUpload(
       }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
+  }
+}
+
+async function initYouTubeResumableUpload(
+  uploadData: UploadRequest,
+  videoSize: number
+): Promise<string> {
+  const initResponse = await fetch(
+    'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${uploadData.accessToken}`,
+        'Content-Type': 'application/json',
+        'X-Upload-Content-Length': videoSize.toString(),
+        'X-Upload-Content-Type': 'video/*',
+      },
+      body: JSON.stringify({
+        snippet: {
+          title: uploadData.title,
+          description: uploadData.description || '',
+          categoryId: uploadData.categoryId || '22',
+          defaultLanguage: uploadData.defaultLanguage || 'id',
+          defaultAudioLanguage: uploadData.defaultAudioLanguage || 'id',
+        },
+        status: {
+          privacyStatus: uploadData.privacyStatus || 'private',
+        },
+      }),
+    }
+  )
+
+  if (!initResponse.ok) {
+    const error = await initResponse.text()
+    throw new Error(`YouTube init failed: ${error}`)
+  }
+
+  const uploadUrl = initResponse.headers.get('location')
+  if (!uploadUrl) {
+    throw new Error('No upload URL received')
+  }
+
+  return uploadUrl
+}
+
+async function getOneDriveVideoStream(
+  videoUrl: string
+): Promise<{ stream: ReadableStream<Uint8Array>; size: number }> {
+  const response = await fetchWithRetry(videoUrl, 2)
+  if (!response.ok || !response.body) {
+    throw new Error('Failed to fetch fresh OneDrive stream')
+  }
+
+  const size = parseInt(response.headers.get('content-length') || '0')
+  return {
+    stream: response.body,
+    size: Number.isFinite(size) ? size : 0,
+  }
+}
+
+function getChunkPlanForWorkerLimit(totalSize: number): {
+  chunkSize: number
+  estimatedChunks: number
+  feasible: boolean
+} {
+  if (!Number.isFinite(totalSize) || totalSize <= 0) {
+    return {
+      chunkSize: CHUNK_SIZE,
+      estimatedChunks: 1,
+      feasible: true,
+    }
+  }
+
+  const requiredPerChunk = Math.ceil(totalSize / TARGET_MAX_CHUNKS)
+  const roundedRequired = Math.ceil(requiredPerChunk / MIN_RESUMABLE_CHUNK_SIZE) * MIN_RESUMABLE_CHUNK_SIZE
+  const chunkSize = Math.min(
+    MAX_CHUNK_SIZE,
+    Math.max(CHUNK_SIZE, roundedRequired)
+  )
+
+  const estimatedChunks = Math.ceil(totalSize / chunkSize)
+
+  return {
+    chunkSize,
+    estimatedChunks,
+    feasible: estimatedChunks <= HARD_MAX_CHUNKS,
   }
 }
 
@@ -482,15 +596,64 @@ async function uploadSubtitleFromBlob(
   }
 }
 
-async function uploadVideoChunked(
+async function uploadVideoSingleStream(
   stream: ReadableStream<Uint8Array>,
   uploadUrl: string,
   totalSize: number,
   uploadId: string,
   env: Env
 ): Promise<string> {
+  const uploadResponse = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Length': totalSize.toString(),
+      'Content-Range': `bytes 0-${totalSize - 1}/${totalSize}`,
+    },
+    body: stream,
+    duplex: 'half',
+  } as RequestInit)
+
+  if (!uploadResponse.ok) {
+    throw new Error(`Single stream upload failed: ${await uploadResponse.text()}`)
+  }
+
+  const result = await uploadResponse.json() as { id?: string }
+  if (!result.id) {
+    throw new Error('Single stream upload completed but no video ID received')
+  }
+
+  await updateProgress(env, uploadId, totalSize, totalSize)
+  return result.id
+}
+
+async function uploadVideoChunked(
+  stream: ReadableStream<Uint8Array>,
+  uploadUrl: string,
+  totalSize: number,
+  uploadId: string,
+  env: Env,
+  options?: {
+    disableProgress?: boolean
+    chunkSize?: number
+    maxChunks?: number
+  }
+): Promise<string> {
   if (!Number.isFinite(totalSize) || totalSize <= 0) {
     throw new Error('Ukuran video tidak valid untuk resumable upload')
+  }
+
+  const effectiveChunkSize = Math.max(
+    MIN_RESUMABLE_CHUNK_SIZE,
+    options?.chunkSize || CHUNK_SIZE
+  )
+
+  if (options?.maxChunks) {
+    const estimatedChunks = Math.ceil(totalSize / effectiveChunkSize)
+    if (estimatedChunks > options.maxChunks) {
+      throw new Error(
+        `Jumlah chunk terlalu banyak untuk limit Worker (${estimatedChunks} > ${options.maxChunks})`
+      )
+    }
   }
 
   const reader = stream.getReader()
@@ -499,6 +662,7 @@ async function uploadVideoChunked(
   let bufferSize = 0
   let pendingChunk: Uint8Array | null = null
   let streamDone = false
+  let lastProgressUpdatedAt = 0
 
   const concatUint8Arrays = (a: Uint8Array, b: Uint8Array): Uint8Array => {
     const merged = new Uint8Array(a.length + b.length)
@@ -536,8 +700,8 @@ async function uploadVideoChunked(
         bufferSize += value.length
       }
 
-      // Upload chunk jika buffer >= CHUNK_SIZE atau stream selesai
-      if (bufferSize >= CHUNK_SIZE || (done && bufferSize > 0)) {
+      // Upload chunk jika buffer >= target chunk size atau stream selesai
+      if (bufferSize >= effectiveChunkSize || (done && bufferSize > 0)) {
         const chunk = new Uint8Array(bufferSize)
         let offset = 0
         for (const arr of buffer) {
@@ -614,8 +778,17 @@ async function uploadVideoChunked(
 
       uploadedBytes = ackedBytes
 
-      // Update progress ke Redis
-      await updateProgress(env, uploadId, uploadedBytes, totalSize)
+      if (!options?.disableProgress) {
+        const shouldUpdateProgress =
+          uploadedBytes === totalSize ||
+          uploadedBytes - lastProgressUpdatedAt >= PROGRESS_UPDATE_INTERVAL
+
+        // Throttle progress updates to avoid Cloudflare subrequest limit.
+        if (shouldUpdateProgress) {
+          await updateProgress(env, uploadId, uploadedBytes, totalSize)
+          lastProgressUpdatedAt = uploadedBytes
+        }
+      }
     }
   }
 
